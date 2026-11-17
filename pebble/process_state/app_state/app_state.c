@@ -122,6 +122,9 @@ typedef struct {
   //! follows the master "Touch" pref alone; mere participation (system apps) follows the system
   //! nav state (master AND the Touch Navigation sub-pref).
   bool touch_nav_opted_in;
+  //! Whether the nav dispatcher is installed in the touch service system slot, and whether only
+  //! for the bezel (an app picked for bezel scrolling that touch navigation does not cover).
+  bool touch_nav_installed;
 #endif
 
   uint8_t *js_runtime_context_buffer;
@@ -247,9 +250,19 @@ static bool prv_app_twin_master_enabled(void *ctx) {
   return sys_touch_service_is_enabled();
 }
 
-static void prv_app_twin_install_handler(void *ctx) {
+static void prv_app_touch_nav_install(bool bezel_only) {
+  TouchNavState *nav = &s_app_state_ptr->touch_nav_state;
+  nav->bezel_only = bezel_only;
   // touch_service_set_system_handler also no-ops for watchfaces, so they never receive emulation.
-  touch_service_set_system_handler(touch_nav_dispatch, &s_app_state_ptr->touch_nav_state);
+  touch_service_set_system_handler(touch_nav_dispatch, nav);
+  // The dispatcher decides what the app's own touch handler gets: it holds back and keeps the
+  // bezel rotations in an app picked for the bezel.
+  touch_service_set_raw_gate(touch_nav_raw_disposition, nav);
+  s_app_state_ptr->touch_nav_installed = true;
+}
+
+static void prv_app_twin_install_handler(void *ctx) {
+  prv_app_touch_nav_install(false /* bezel_only */);
   // Mark the app twin live so the dispatch gate and touch-driven backlight treat this app as
   // navigating even when system nav (the Touch Navigation sub-pref) is off.
   sys_touch_set_app_nav_active(true);
@@ -258,7 +271,24 @@ static void prv_app_twin_install_handler(void *ctx) {
 static void prv_app_twin_remove_handler(void *ctx) {
   sys_touch_set_app_nav_active(false);
   recognizer_manager_cancel_and_reset(&s_app_state_ptr->recognizer_manager);
+  touch_service_set_raw_gate(nullptr, nullptr);
   touch_service_set_system_handler(nullptr, nullptr);
+  s_app_state_ptr->touch_nav_installed = false;
+  s_app_state_ptr->touch_nav_state.bezel_only = false;
+}
+
+//! An app picked for bezel scrolling that touch navigation does not cover (a third-party app)
+//! still gets the dispatcher, for the bezel alone. Run after every twin (re)evaluation.
+static void prv_app_bezel_only_sync(void) {
+  const bool want = s_app_state_ptr->touch_nav_state.bezel_app && sys_touch_nav_enabled();
+  if (!s_app_state_ptr->touch_nav_installed) {
+    if (want) {
+      prv_app_touch_nav_install(true /* bezel_only */);
+      sys_touch_set_app_nav_active(true);
+    }
+  } else if (s_app_state_ptr->touch_nav_state.bezel_only && !want) {
+    prv_app_twin_remove_handler(nullptr);
+  }
 }
 
 static const TouchNavTwinOps s_app_twin_ops = {
@@ -286,6 +316,9 @@ PBL_NOINLINE void app_state_init(void) {
   s_app_state_ptr->touch_nav_participating =
       app_install_id_from_system(app_manager_get_current_app_id());
   s_app_state_ptr->touch_nav_opted_in = false;
+  s_app_state_ptr->touch_nav_installed = false;
+  // Picked by the user for bezel scrolling (Settings > Display > Bezel Scrolling > Use in Apps).
+  s_app_state_ptr->touch_nav_state.bezel_app = sys_touch_bezel_app_enabled();
 #endif
 
   animation_private_state_init(&s_app_state_ptr->animation_state);
@@ -557,6 +590,7 @@ void app_touch_nav_subscribe(void) {
   // apps. The gate/decision lives in touch_nav.c (unit-testable via s_app_twin_ops).
   touch_nav_app_twin_subscribe(&s_app_twin_ops, s_app_state_ptr->touch_nav_participating,
                                s_app_state_ptr->touch_nav_opted_in);
+  prv_app_bezel_only_sync();
 }
 
 void app_touch_nav_unsubscribe(void) {
@@ -568,6 +602,7 @@ void app_touch_nav_resync(void) {
   // when only the Touch Navigation sub-pref turned off, removes it when the master pref did.
   touch_nav_app_twin_resync(&s_app_twin_ops, s_app_state_ptr->touch_nav_participating,
                             s_app_state_ptr->touch_nav_opted_in);
+  prv_app_bezel_only_sync();
 }
 
 void app_touch_nav_set_participating(bool enable) {
@@ -576,6 +611,7 @@ void app_touch_nav_set_participating(bool enable) {
   // Idempotent when nothing changes.
   touch_nav_app_twin_reconcile(&s_app_twin_ops, &s_app_state_ptr->touch_nav_participating,
                                &s_app_state_ptr->touch_nav_opted_in, enable);
+  prv_app_bezel_only_sync();
 }
 #endif
 

@@ -13,8 +13,10 @@
 #include <kernel/event_loop.h>
 #include <kernel/pebble_tasks.h>
 #include <kernel/ui/modals/modal_manager.h>
+#include <process_management/app_manager.h>
 #include <process_management/process_manager.h>
 #include <process_state/app_state/app_state.h>
+#include <shell/prefs.h>
 #include <syscall/syscall.h>
 
 // --- Action-bar snapshot publish (applib -> current task's nav state) --------------------------
@@ -44,6 +46,20 @@ PBL_SYSCALL(void, sys_touch_set_action_bar, (IN_OPT, const GRect *, frame),
     local_frame = *frame;
   }
   touch_nav_set_action_bar(state, frame ? &local_frame : nullptr, icon_mask);
+}
+
+// --- Bezel scrolling in picked apps ---------------------------------------------------------
+
+PBL_SYSCALL(bool, sys_touch_bezel_app_enabled) {
+#ifdef CONFIG_TOUCH_NAV_BEZEL
+  if (!touch_bezel_nav_enabled()) {
+    return false;
+  }
+  const PebbleProcessMd *md = app_manager_get_current_app_md();
+  return md && touch_bezel_app_is_enabled(&md->uuid);
+#else
+  return false;
+#endif
 }
 
 // --- KernelMain-bound effects -----------------------------------------------------------------
