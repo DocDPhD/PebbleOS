@@ -36,6 +36,41 @@ static TouchServiceState *prv_get_state(void) {
   }
 }
 
+//! Deliver \a touch to the raw slot as the gate decided.
+static void prv_deliver_raw(TouchServiceState *state, const TouchEvent *touch,
+                            TouchRawDisposition disposition) {
+  switch (disposition) {
+    case TouchRawDisposition_Hold:
+      // Keep the Touchdown for a later Release; the moves in between are not needed to replay.
+      if (touch->type == TouchEvent_Touchdown) {
+        state->held_touchdown = *touch;
+        state->has_held_touchdown = true;
+      }
+      return;
+    case TouchRawDisposition_Consume:
+      state->has_held_touchdown = false;
+      return;
+    case TouchRawDisposition_Release:
+      if (state->has_held_touchdown) {
+        state->has_held_touchdown = false;
+        if (state->raw_handler) {
+          const TouchEvent held = state->held_touchdown;
+          state->raw_handler(&held, state->raw_context);
+        }
+      }
+      break;
+    case TouchRawDisposition_Pass:
+    default:
+      if (touch->type == TouchEvent_Touchdown) {
+        state->has_held_touchdown = false;
+      }
+      break;
+  }
+  if (state->raw_handler) {
+    state->raw_handler(touch, state->raw_context);
+  }
+}
+
 static void prv_handle_touch_event(PebbleEvent *e, void *context) {
   TouchServiceState *state = prv_get_state();
   if (!state || e->type != PEBBLE_TOUCH_EVENT) {
@@ -46,9 +81,11 @@ static void prv_handle_touch_event(PebbleEvent *e, void *context) {
   if (state->system_handler) {
     state->system_handler(&touch, state->system_context);
   }
-  if (state->raw_handler) {
-    state->raw_handler(&touch, state->raw_context);
+  TouchRawDisposition disposition = TouchRawDisposition_Pass;
+  if (state->system_handler && state->raw_gate) {
+    disposition = state->raw_gate(state->raw_gate_context);
   }
+  prv_deliver_raw(state, &touch, disposition);
 }
 
 //! Bring the shared event-service subscription in line with the slots: keep it
@@ -76,6 +113,16 @@ void touch_service_set_system_handler(TouchServiceHandler handler, void *context
   state->system_handler = handler;
   state->system_context = context;
   prv_update_subscription(state);
+}
+
+void touch_service_set_raw_gate(TouchServiceRawGate gate, void *context) {
+  TouchServiceState *state = prv_get_state();
+  if (!state) {
+    return;
+  }
+  state->raw_gate = gate;
+  state->raw_gate_context = context;
+  state->has_held_touchdown = false;
 }
 
 void touch_service_subscribe(TouchServiceHandler handler, void *context) {

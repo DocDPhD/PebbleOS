@@ -235,3 +235,101 @@ void test_touch_service__unsubscribe_keeps_system_slot(void) {
   cl_assert(s_state.subscribed);
   cl_assert_equal_i(s_unsubscribe_count, 0);
 }
+
+// Raw gate: the system slot holds back, releases or uses a gesture before the raw slot sees it.
+//////////////////////////////////////////
+static TouchRawDisposition s_gate_disposition;
+static int s_gate_marker;
+
+static TouchRawDisposition prv_gate(void *context) {
+  cl_assert_equal_p(context, &s_gate_marker);
+  return s_gate_disposition;
+}
+
+typedef struct RawLog {
+  int count;
+  TouchEvent events[8];
+} RawLog;
+
+static RawLog s_raw_log;
+
+static void prv_logging_raw_handler(const TouchEvent *event, void *context) {
+  if (s_raw_log.count < 8) {
+    s_raw_log.events[s_raw_log.count] = *event;
+  }
+  s_raw_log.count++;
+}
+
+static void prv_gated_setup(void) {
+  s_raw_log = (RawLog){};
+  touch_service_set_system_handler(prv_system_handler, &s_system_marker);
+  touch_service_set_raw_gate(prv_gate, &s_gate_marker);
+  touch_service_subscribe(prv_logging_raw_handler, &s_raw_marker);
+}
+
+static void prv_gated_deliver(TouchRawDisposition disposition, TouchEventType type, int16_t x,
+                              int16_t y) {
+  s_gate_disposition = disposition;
+  prv_deliver_touch(type, x, y);
+}
+
+void test_touch_service__no_gate_passes_everything(void) {
+  s_raw_log = (RawLog){};
+  touch_service_set_system_handler(prv_system_handler, &s_system_marker);
+  touch_service_subscribe(prv_logging_raw_handler, &s_raw_marker);
+  s_gate_disposition = TouchRawDisposition_Consume; // ignored: no gate set
+  prv_deliver_touch(TouchEvent_Touchdown, 1, 1);
+  prv_deliver_touch(TouchEvent_Liftoff, 1, 1);
+  cl_assert_equal_i(s_raw_log.count, 2);
+}
+
+void test_touch_service__gate_pass_delivers(void) {
+  prv_gated_setup();
+  prv_gated_deliver(TouchRawDisposition_Pass, TouchEvent_Touchdown, 10, 20);
+  prv_gated_deliver(TouchRawDisposition_Pass, TouchEvent_Liftoff, 10, 20);
+  cl_assert_equal_i(s_raw_log.count, 2);
+  cl_assert_equal_i(s_system_rec.calls, 2);
+}
+
+void test_touch_service__gate_hold_then_release_replays_touchdown(void) {
+  prv_gated_setup();
+  prv_gated_deliver(TouchRawDisposition_Hold, TouchEvent_Touchdown, 250, 130);
+  prv_gated_deliver(TouchRawDisposition_Hold, TouchEvent_PositionUpdate, 248, 140);
+  cl_assert_equal_i(s_raw_log.count, 0);
+  prv_gated_deliver(TouchRawDisposition_Release, TouchEvent_PositionUpdate, 200, 140);
+  cl_assert_equal_i(s_raw_log.count, 2);
+  cl_assert_equal_i(s_raw_log.events[0].type, TouchEvent_Touchdown);
+  cl_assert_equal_i(s_raw_log.events[0].x, 250);
+  cl_assert_equal_i(s_raw_log.events[1].type, TouchEvent_PositionUpdate);
+  cl_assert_equal_i(s_raw_log.events[1].x, 200);
+  prv_gated_deliver(TouchRawDisposition_Pass, TouchEvent_Liftoff, 200, 140);
+  cl_assert_equal_i(s_raw_log.count, 3);
+}
+
+void test_touch_service__gate_consume_drops_gesture(void) {
+  prv_gated_setup();
+  prv_gated_deliver(TouchRawDisposition_Hold, TouchEvent_Touchdown, 250, 130);
+  prv_gated_deliver(TouchRawDisposition_Consume, TouchEvent_PositionUpdate, 240, 160);
+  prv_gated_deliver(TouchRawDisposition_Consume, TouchEvent_Liftoff, 240, 160);
+  cl_assert_equal_i(s_raw_log.count, 0);
+  // A release after a consume has no stale Touchdown to replay.
+  prv_gated_deliver(TouchRawDisposition_Release, TouchEvent_Liftoff, 0, 0);
+  cl_assert_equal_i(s_raw_log.count, 1);
+  cl_assert_equal_i(s_raw_log.events[0].type, TouchEvent_Liftoff);
+}
+
+void test_touch_service__new_touchdown_drops_stale_hold(void) {
+  prv_gated_setup();
+  prv_gated_deliver(TouchRawDisposition_Hold, TouchEvent_Touchdown, 250, 130);
+  prv_gated_deliver(TouchRawDisposition_Pass, TouchEvent_Touchdown, 130, 130);
+  prv_gated_deliver(TouchRawDisposition_Release, TouchEvent_Liftoff, 130, 130);
+  cl_assert_equal_i(s_raw_log.count, 2);
+  cl_assert_equal_i(s_raw_log.events[0].x, 130);
+}
+
+void test_touch_service__gate_cleared_passes_again(void) {
+  prv_gated_setup();
+  touch_service_set_raw_gate(nullptr, nullptr);
+  prv_gated_deliver(TouchRawDisposition_Consume, TouchEvent_Touchdown, 1, 1);
+  cl_assert_equal_i(s_raw_log.count, 1);
+}

@@ -6,6 +6,9 @@
 #include "event_service_client.h"
 #include "touch_service.h"
 
+//! Decides what the raw slot gets of the event the system slot just handled.
+typedef TouchRawDisposition (*TouchServiceRawGate)(void *context);
+
 //! Per-task state for the applib touch service. Must live in task-accessible
 //! memory (app/kernel state) so syscalls that validate buffers see it
 //! as userspace-local.
@@ -17,6 +20,13 @@ typedef struct TouchServiceState {
   // Raw slot: the app-facing subscription managed via touch_service_subscribe.
   TouchServiceHandler raw_handler;
   void *raw_context;
+  // Optional gate set with the system slot: lets the system hold back or use a gesture before
+  // the raw slot sees it. Without it, the raw slot gets every event.
+  TouchServiceRawGate raw_gate;
+  void *raw_gate_context;
+  // A Touchdown held back from the raw slot by the gate.
+  TouchEvent held_touchdown;
+  bool has_held_touchdown;
   // A single event-service subscription is shared by both slots.
   EventServiceInfo event_info;
   bool subscribed;
@@ -30,3 +40,7 @@ void touch_service_state_init(TouchServiceState *state);
 //! subscriber. The system handler runs before the app's raw handler. Pass a
 //! NULL handler to clear the slot. Independent of touch_service_unsubscribe().
 void touch_service_set_system_handler(TouchServiceHandler handler, void *context);
+
+//! Set the gate the raw slot is filtered through after the system handler ran; NULL to deliver
+//! every event to it. Not exposed to apps.
+void touch_service_set_raw_gate(TouchServiceRawGate gate, void *context);
