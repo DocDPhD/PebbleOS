@@ -43,7 +43,40 @@ typedef enum TouchNavRoute {
   TouchNavRoute_Tier2,
   //! The gesture is dropped (status-bar dead zone with no sole widget, or a gated Touchdown).
   TouchNavRoute_Dropped,
+  //! A Touchdown in the bezel ring, held back from the recognizers until it is known to be a
+  //! rotation (see \ref TouchNavBezel).
+  TouchNavRoute_Bezel,
 } TouchNavRoute;
+
+//! Bezel gesture phase.
+typedef enum TouchNavBezelPhase {
+  //! No bezel gesture: touches go through the normal routing.
+  TouchNavBezelPhase_Idle,
+  //! A Touchdown landed in the edge ring and is held back. It becomes a rotation once the finger
+  //! has turned far enough around the center, or is replayed to the recognizers (as a tap, swipe
+  //! or pan) if the finger moves inward or lifts first.
+  TouchNavBezelPhase_Pending,
+  //! A committed rotation: every step around the center emits UP or DOWN until Liftoff.
+  TouchNavBezelPhase_Active,
+} TouchNavBezelPhase;
+
+//! Per-gesture bezel state.
+typedef struct TouchNavBezel {
+  //! \ref TouchNavBezelPhase.
+  uint8_t phase;
+  //! The held-back Touchdown, replayed when the gesture is not a rotation.
+  TouchEvent touchdown;
+  //! Touchdown time, so a long stationary hold is not replayed as a tap.
+  uint64_t touchdown_ticks;
+  //! Angle of the last sample around the screen center (TRIG_MAX_ANGLE units, clockwise).
+  int32_t last_angle;
+  //! Rotation since the last emitted step (TRIG_MAX_ANGLE units, clockwise positive).
+  int32_t accum;
+  //! Length of the haptic tick of each step, latched on Touchdown; 0 for none.
+  uint16_t haptic_ms;
+  //! Width of the ring the gesture started in, latched on Touchdown.
+  int16_t ring_px;
+} TouchNavBezel;
 
 //! Which Tier-1 registry a widget node belongs to; the registry head implies the type.
 typedef enum TouchNavWidgetType {
@@ -187,6 +220,19 @@ typedef struct TouchNavState {
   //! Latest foreground ActionBarLayer snapshot; consulted when synthesising a tap.
   TouchNavActionBar action_bar;
 
+  //! Bezel scrolling gesture state.
+  TouchNavBezel bezel;
+  //! The user picked this app for bezel scrolling: the bezel works here even though the app
+  //! handles touch itself, and the app's own handler does not see the rotations.
+  bool bezel_app;
+  //! The twin is installed only for the bezel (a picked app outside touch navigation): every
+  //! other touch is left to the app, with no taps, swipes or scrolling synthesized.
+  bool bezel_only;
+  //! What the app's own touch handler gets of the last dispatched event.
+  TouchRawDisposition raw_disposition;
+  //! Set while a bezel step is being emitted, so a click handler can tell it from a button press.
+  bool emitting_bezel_step;
+
   //! Observability counters.
   struct {
     uint16_t started;
@@ -211,6 +257,33 @@ void touch_nav_state_init(TouchNavState *state, RecognizerManager *manager, cons
 //! Tear the state down: cancel any in-flight gesture and deregister the system recognizer set from
 //! the manager's global list. No client callbacks are invoked for a widget-only rebuild.
 void touch_nav_state_deinit(TouchNavState *state);
+
+//! @return true if \a point lies in the bezel ring: within the ring width of the edge of the
+//! round screen of \a width x \a height pixels.
+bool touch_nav_bezel_in_ring(GPoint point, int16_t width, int16_t height, int16_t ring_px);
+
+//! @return the clockwise angle of \a point around the center of a \a width x \a height screen,
+//! in TRIG_MAX_ANGLE units.
+int32_t touch_nav_bezel_angle(GPoint point, int16_t width, int16_t height);
+
+//! @return true while \a state is emitting a bezel step: a click handler called now is handling
+//! a step of the bezel, not a button press, tap or swipe.
+bool touch_nav_is_bezel_step(const TouchNavState *state);
+
+//! @return the width, in pixels, of the bezel ring for a TouchBezelWidth.
+int16_t touch_nav_bezel_ring_px(uint8_t width);
+
+//! @return the length, in milliseconds, of the haptic tick of a bezel step for a TouchBezelHaptic
+//! strength; 0 for none.
+uint16_t touch_nav_bezel_haptic_ms(uint8_t haptic);
+
+//! @return the shortest signed angle from \a from to \a to, in TRIG_MAX_ANGLE units, positive
+//! clockwise.
+int32_t touch_nav_bezel_angle_delta(int32_t from, int32_t to);
+
+//! Raw-slot gate for the touch service: \a context is the \ref TouchNavState.
+//! @return what the app's own touch handler gets of the event just dispatched.
+TouchRawDisposition touch_nav_raw_disposition(void *context);
 
 //! Touch-service system-slot handler. Conforms to the touch service handler prototype
 //! (\ref TouchServiceHandler). \a context is the \ref TouchNavState.

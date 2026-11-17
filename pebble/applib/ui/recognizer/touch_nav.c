@@ -15,8 +15,10 @@
 #include <pbl/kernel/assert.h>
 #include <pbl/kernel/time.h>
 #include <pbl/logging/logging.h>
+#include <pbl/services/touch/touch.h>
 #include <pbl/util/math.h>
 #include <pbl/util/size.h>
+#include <pbl/util/trig.h>
 
 #include <applib/graphics/gtypes.h>
 #include <applib/ui/layer.h>
@@ -356,6 +358,7 @@ static void prv_apply_tier_exclusion(TouchNavState *state, TouchNavRoute route) 
     case TouchNavRoute_None:
     case TouchNavRoute_Dropped:
     case TouchNavRoute_Tier1:
+    case TouchNavRoute_Bezel:
       // Nobody / dead-zone drop / a Tier-1 widget owning the gesture: the system set must not
       // emulate, so fail all three.
       prv_fail(state, state->tap);
@@ -388,15 +391,16 @@ static ButtonId prv_swipe_button(SwipeDirection direction) {
   }
 }
 
-static void prv_emit_click(TouchNavState *state, ButtonId button) {
+// @return true if the button was emitted (or the BACK pop done), false if it was dropped.
+static bool prv_emit_click(TouchNavState *state, ButtonId button) {
   if (button >= NUM_BUTTONS) {
-    return;
+    return false;
   }
   // Guard the compositor/window transition first: a gesture that lands mid-animation is dropped.
   if (state->ops->is_animating && state->ops->is_animating(state->ops->ctx)) {
     state->counters.dropped++;
     prv_log_push(state, TouchNavLog_Dropped, (uint8_t)button);
-    return;
+    return false;
   }
 
   if (button == BUTTON_ID_BACK &&
@@ -410,6 +414,7 @@ static void prv_emit_click(TouchNavState *state, ButtonId button) {
     state->ops->emit_button(state->ops->ctx, button);
   }
   prv_log_push(state, TouchNavLog_Emit, (uint8_t)button);
+  return true;
 }
 
 static void prv_recognizer_event(const Recognizer *recognizer, RecognizerEvent event) {
@@ -460,12 +465,276 @@ static void prv_recognizer_event(const Recognizer *recognizer, RecognizerEvent e
   }
 }
 
+// Route a navigational Touchdown: hand it to the manager, then resolve and latch the route.
+static void prv_handle_touchdown(TouchNavState *state, const TouchEvent *touch_event) {
+  RecognizerManager *manager = state->manager;
+
+  // Hand the Touchdown to the manager first so it activates and the set is reset to Possible,
+  // then resolve the route once and latch it.
+  recognizer_manager_handle_touch_event(touch_event, manager);
+  if (manager->state == RecognizerManagerState_WaitForTouchdown) {
+    // The manager declined to activate (should not happen for a navigational fresh Touchdown).
+    state->route = TouchNavRoute_None;
+    state->latched_target = nullptr;
+    state->declined = false;
+    return;
+  }
+  state->route = prv_resolve_route(state, touch_event);
+  prv_log_push(state, TouchNavLog_Route, (uint8_t)state->route);
+  // tier-exclusion stays BRIDGE-ONLY: it governs the bridge (tap, pan, swipe) set by route. The
+  // unified widget set is governed solely by its filter plus the fail-at-latch below.
+  prv_apply_tier_exclusion(state, state->route);
+
+  // Latch the unified widget target for the whole gesture, mirroring the bridge route latch. Do
+  // NOT read latched_target during this Touchdown dispatch: it is set AFTER the manager processed
+  // the Touchdown and is only consumed by later events.
+  state->latched_target = prv_resolve_widget_target(state);
+  state->declined = false;
+  if (state->latched_target) {
+    // Catch-to-stop: let the widget react to the bare Touchdown (e.g. stop a coasting fling)
+    // before any recognizer triggers.
+    if (state->latched_target->ops->touchdown) {
+      state->latched_target->ops->touchdown(state->latched_target->widget);
+    }
+  } else {
+    // The gesture belongs to the bridge or an un-migrated widget's own set, not the unified set:
+    // fail the unified tap/pan/swipe now, symmetrically to the bridge exclusion. On a fresh
+    // Touchdown these three are provably still Possible (no recognizer triggers on Touchdown),
+    // and prv_fail only fails a Possible recognizer, so the manager returns to idle by
+    // construction after the gesture instead of leaving a filtered-out recognizer stuck Possible.
+    prv_fail(state, state->widget_tap);
+    prv_fail(state, state->widget_pan);
+    prv_fail(state, state->widget_swipe);
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Bezel scrolling
+//
+// A finger that lands in a ring along the edge of the round screen and slides around the center
+// acts like a rotating bezel: every step of rotation emits DOWN (clockwise) or UP
+// (counter-clockwise). The Touchdown is held back from the recognizers until the finger has
+// turned far enough to commit, so a tap or an inward swipe that starts at the edge still reaches
+// them unchanged (it is replayed).
+
+#ifdef CONFIG_TOUCH_NAV_BEZEL
+
+bool touch_nav_bezel_in_ring(GPoint point, int16_t width, int16_t height, int16_t ring_px) {
+  const int32_t dx = point.x - width / 2;
+  const int32_t dy = point.y - height / 2;
+  const int32_t inner = MAX(MIN(width, height) / 2 - ring_px, 0);
+  return dx * dx + dy * dy >= inner * inner;
+}
+
+int32_t touch_nav_bezel_angle(GPoint point, int16_t width, int16_t height) {
+  // Screen y grows downward, so the angle atan2 measures from +x grows clockwise on screen.
+  return atan2_lookup((int16_t)(point.y - height / 2), (int16_t)(point.x - width / 2));
+}
+
+int32_t touch_nav_bezel_angle_delta(int32_t from, int32_t to) {
+  int32_t delta = (to - from) % TRIG_MAX_ANGLE;
+  if (delta > TRIG_MAX_ANGLE / 2) {
+    delta -= TRIG_MAX_ANGLE;
+  } else if (delta <= -TRIG_MAX_ANGLE / 2) {
+    delta += TRIG_MAX_ANGLE;
+  }
+  return delta;
+}
+
+#define BEZEL_WIDTH  ((int16_t)CONFIG_PLATFORM_DISPLAY_WIDTH)
+#define BEZEL_HEIGHT ((int16_t)CONFIG_PLATFORM_DISPLAY_HEIGHT)
+#define BEZEL_STEP   DEG_TO_TRIGANGLE(CONFIG_TOUCH_NAV_BEZEL_STEP_DEG)
+#define BEZEL_COMMIT DEG_TO_TRIGANGLE(CONFIG_TOUCH_NAV_BEZEL_COMMIT_DEG)
+// Inward slack past the ring before a pending touch is handed back as a normal gesture.
+#define BEZEL_EXIT_SLACK_PX (12)
+// Samples closer than this to the center are ignored: their angle is too noisy.
+#define BEZEL_MIN_RADIUS_PX (40)
+// A pending touch held longer than this without rotating is not replayed as a tap (matches
+// TAP_MAX_DURATION_MS in tap.c).
+#define BEZEL_TAP_MAX_MS (300)
+
+// Ring width per TouchBezelWidth: how far in from the edge a rotation may start.
+static const int16_t s_bezel_ring_px[TouchBezelWidthCount] = {
+  [TouchBezelWidth_Thin] = 18,
+  [TouchBezelWidth_Standard] = 26,
+  [TouchBezelWidth_Large] = 36,
+};
+
+bool touch_nav_is_bezel_step(const TouchNavState *state) {
+  return state && state->emitting_bezel_step;
+}
+
+int16_t touch_nav_bezel_ring_px(uint8_t width) {
+  return (width < TouchBezelWidthCount) ? s_bezel_ring_px[width]
+                                        : s_bezel_ring_px[TouchBezelWidth_Standard];
+}
+
+// Tick length per TouchBezelHaptic strength: a longer pulse lets the motor build up further.
+static const uint16_t s_bezel_haptic_ms[TouchBezelHapticCount] = {
+  [TouchBezelHaptic_Off] = 0,
+  [TouchBezelHaptic_Light] = 15,
+  [TouchBezelHaptic_Medium] = 25,
+  [TouchBezelHaptic_Strong] = 40,
+};
+
+uint16_t touch_nav_bezel_haptic_ms(uint8_t haptic) {
+  return (haptic < TouchBezelHapticCount) ? s_bezel_haptic_ms[haptic]
+                                          : s_bezel_haptic_ms[TouchBezelHaptic_Light];
+}
+
+// A short pulse per step, like the detents of a real bezel, at the user's vibration strength.
+// The pattern service refuses it while another pattern plays, so a tick never cuts into a
+// notification, and steps faster than a tick merge into it.
+static void prv_bezel_haptic_tick(const TouchNavBezel *bezel) {
+  if (bezel->haptic_ms == 0) {
+    return;
+  }
+  if (sys_vibe_pattern_enqueue_step(bezel->haptic_ms, true)) {
+    sys_vibe_pattern_trigger_start();
+  }
+}
+
+// Whether the bezel must stay out of the top window: it opted out of the bridge, or the app
+// handles touch itself. An app the user picked for the bezel gets it regardless.
+static bool prv_bezel_blocked(TouchNavState *state) {
+  return !state->bezel_app && state->ops->top_bridge_disabled &&
+         state->ops->top_bridge_disabled(state->ops->ctx);
+}
+
+static bool prv_bezel_try_start(TouchNavState *state, const TouchEvent *touchdown) {
+  // Bezel scrolling is part of system navigation, behind its own pref.
+  if (!sys_touch_nav_enabled() || !sys_touch_bezel_nav_enabled()) {
+    return false;
+  }
+  const GPoint point = GPoint(touchdown->x, touchdown->y);
+  const int16_t ring_px = touch_nav_bezel_ring_px(sys_touch_bezel_width());
+  if (!touch_nav_bezel_in_ring(point, BEZEL_WIDTH, BEZEL_HEIGHT, ring_px)) {
+    return false;
+  }
+  if (prv_bezel_blocked(state)) {
+    return false;
+  }
+  state->bezel = (TouchNavBezel){
+    .phase = TouchNavBezelPhase_Pending,
+    .touchdown = *touchdown,
+    .touchdown_ticks = sys_get_ticks(),
+    .last_angle = touch_nav_bezel_angle(point, BEZEL_WIDTH, BEZEL_HEIGHT),
+    .haptic_ms = touch_nav_bezel_haptic_ms(sys_touch_bezel_haptic()),
+    .ring_px = ring_px,
+  };
+  state->route = TouchNavRoute_Bezel;
+  state->latched_target = nullptr;
+  state->declined = false;
+  prv_log_push(state, TouchNavLog_Route, (uint8_t)TouchNavRoute_Bezel);
+  return true;
+}
+
+// Hand a held-back gesture on: to the recognizers (its Touchdown, then the current event) unless
+// the twin only drives the bezel, and to the app's own handler.
+static TouchRawDisposition prv_bezel_replay(TouchNavState *state, const TouchEvent *current) {
+  state->bezel.phase = TouchNavBezelPhase_Idle;
+  if (state->bezel_only) {
+    state->route = TouchNavRoute_None;
+  } else {
+    prv_handle_touchdown(state, &state->bezel.touchdown);
+    recognizer_manager_handle_touch_event(current, state->manager);
+  }
+  return TouchRawDisposition_Release;
+}
+
+static void prv_bezel_track(TouchNavBezel *bezel, GPoint point) {
+  const int32_t angle = touch_nav_bezel_angle(point, BEZEL_WIDTH, BEZEL_HEIGHT);
+  bezel->accum += touch_nav_bezel_angle_delta(bezel->last_angle, angle);
+  bezel->last_angle = angle;
+}
+
+static void prv_bezel_emit(TouchNavState *state, ButtonId button) {
+  // Same re-check as the bridge's Liftoff emit: the window may have opted out mid-gesture.
+  if (prv_bezel_blocked(state)) {
+    state->counters.dropped++;
+    prv_log_push(state, TouchNavLog_Dropped, (uint8_t)button);
+    return;
+  }
+  state->emitting_bezel_step = true;
+  const bool emitted = prv_emit_click(state, button);
+  state->emitting_bezel_step = false;
+  if (emitted) {
+    prv_bezel_haptic_tick(&state->bezel);
+  }
+}
+
+static void prv_bezel_emit_steps(TouchNavState *state) {
+  TouchNavBezel *bezel = &state->bezel;
+  while (bezel->accum >= BEZEL_STEP) {
+    bezel->accum -= BEZEL_STEP;
+    prv_bezel_emit(state, BUTTON_ID_DOWN);
+  }
+  while (bezel->accum <= -BEZEL_STEP) {
+    bezel->accum += BEZEL_STEP;
+    prv_bezel_emit(state, BUTTON_ID_UP);
+  }
+}
+
+// @return what the app's own touch handler gets of \a touch_event.
+static TouchRawDisposition prv_bezel_handle_event(TouchNavState *state,
+                                                  const TouchEvent *touch_event) {
+  TouchNavBezel *bezel = &state->bezel;
+  const GPoint point = GPoint(touch_event->x, touch_event->y);
+
+  if (bezel->phase == TouchNavBezelPhase_Pending) {
+    if (touch_event->type == TouchEvent_Liftoff) {
+      const uint64_t elapsed_ms = (sys_get_ticks() - bezel->touchdown_ticks) * 1000 / PBL_TICK_HZ;
+      if (elapsed_ms <= BEZEL_TAP_MAX_MS) {
+        // A quick touch at the edge: let the recognizers see it (a tap, or a short swipe).
+        return prv_bezel_replay(state, touch_event);
+      }
+      // A long stationary hold did nothing in navigation before bezel scrolling either. The
+      // app's own handler still gets it.
+      bezel->phase = TouchNavBezelPhase_Idle;
+      state->route = TouchNavRoute_Dropped;
+      return TouchRawDisposition_Release;
+    }
+    prv_bezel_track(bezel, point);
+    if (!touch_nav_bezel_in_ring(point, BEZEL_WIDTH, BEZEL_HEIGHT,
+                                 bezel->ring_px + BEZEL_EXIT_SLACK_PX)) {
+      // The finger moved inward: an ordinary swipe or drag that started at the edge.
+      return prv_bezel_replay(state, touch_event);
+    }
+    if (ABS(bezel->accum) >= BEZEL_COMMIT) {
+      bezel->phase = TouchNavBezelPhase_Active;
+      prv_bezel_emit_steps(state);
+      return TouchRawDisposition_Consume;
+    }
+    return TouchRawDisposition_Hold;
+  }
+
+  // Active: follow the finger around the center until Liftoff, wherever it drifts.
+  if (touch_event->type == TouchEvent_Liftoff) {
+    bezel->phase = TouchNavBezelPhase_Idle;
+    return TouchRawDisposition_Consume;
+  }
+  if (touch_nav_bezel_in_ring(point, BEZEL_WIDTH, BEZEL_HEIGHT,
+                              MIN(BEZEL_WIDTH, BEZEL_HEIGHT) / 2 - BEZEL_MIN_RADIUS_PX)) {
+    prv_bezel_track(bezel, point);
+    prv_bezel_emit_steps(state);
+  }
+  return TouchRawDisposition_Consume;
+}
+
+#endif // CONFIG_TOUCH_NAV_BEZEL
+
 // ---------------------------------------------------------------------------------------------
 // Dispatcher
+
+TouchRawDisposition touch_nav_raw_disposition(void *context) {
+  const TouchNavState *state = context;
+  return state ? state->raw_disposition : TouchRawDisposition_Pass;
+}
 
 void touch_nav_dispatch(const TouchEvent *touch_event, void *context) {
   TouchNavState *state = context;
   PBL_ASSERTN(state && state->manager && state->ops);
+  state->raw_disposition = TouchRawDisposition_Pass;
 
   // Nothing navigating: inert even if a stale subscription remains. The recognizer set is never
   // activated, no route is resolved, and the bridge synthesizes nothing. System nav covers the
@@ -478,6 +747,9 @@ void touch_nav_dispatch(const TouchEvent *touch_event, void *context) {
   RecognizerManager *manager = state->manager;
 
   if (touch_event->type == TouchEvent_Touchdown) {
+    // A Touchdown always starts a fresh gesture.
+    state->bezel.phase = TouchNavBezelPhase_Idle;
+
     // Live gate re-check: the navigational/gated decision is read from the touch EVENT itself
     // (event-time), not cached from the last focus-change event. The dispatcher runs per touch
     // event, so a delayed/missed PEBBLE_APP_DID_CHANGE_FOCUS_EVENT cannot stale this decision.
@@ -507,45 +779,28 @@ void touch_nav_dispatch(const TouchEvent *touch_event, void *context) {
       state->ops->idle_refresh(state->ops->ctx);
     }
 
-    // Hand the Touchdown to the manager first so it activates and the set is reset to Possible,
-    // then resolve the route once and latch it.
-    recognizer_manager_handle_touch_event(touch_event, manager);
-    if (manager->state == RecognizerManagerState_WaitForTouchdown) {
-      // The manager declined to activate (should not happen for a navigational fresh Touchdown).
-      state->route = TouchNavRoute_None;
-      state->latched_target = nullptr;
-      state->declined = false;
+#ifdef CONFIG_TOUCH_NAV_BEZEL
+    if (prv_bezel_try_start(state, touch_event)) {
+      state->raw_disposition = TouchRawDisposition_Hold;
       return;
     }
-    state->route = prv_resolve_route(state, touch_event);
-    prv_log_push(state, TouchNavLog_Route, (uint8_t)state->route);
-    // tier-exclusion stays BRIDGE-ONLY: it governs the bridge (tap, pan, swipe) set by route. The
-    // unified widget set is governed solely by its filter plus the fail-at-latch below.
-    prv_apply_tier_exclusion(state, state->route);
-
-    // Latch the unified widget target for the whole gesture, mirroring the bridge route latch. Do
-    // NOT read latched_target during this Touchdown dispatch: it is set AFTER the manager processed
-    // the Touchdown and is only consumed by later events.
-    state->latched_target = prv_resolve_widget_target(state);
-    state->declined = false;
-    if (state->latched_target) {
-      // Catch-to-stop: let the widget react to the bare Touchdown (e.g. stop a coasting fling)
-      // before any recognizer triggers.
-      if (state->latched_target->ops->touchdown) {
-        state->latched_target->ops->touchdown(state->latched_target->widget);
-      }
-    } else {
-      // The gesture belongs to the bridge or an un-migrated widget's own set, not the unified set:
-      // fail the unified tap/pan/swipe now, symmetrically to the bridge exclusion. On a fresh
-      // Touchdown these three are provably still Possible (no recognizer triggers on Touchdown),
-      // and prv_fail only fails a Possible recognizer, so the manager returns to idle by
-      // construction after the gesture instead of leaving a filtered-out recognizer stuck Possible.
-      prv_fail(state, state->widget_tap);
-      prv_fail(state, state->widget_pan);
-      prv_fail(state, state->widget_swipe);
+#endif
+    if (state->bezel_only) {
+      // Installed only for the bezel: the rest of the gesture is the app's alone.
+      state->route = TouchNavRoute_None;
+      return;
     }
-
+    prv_handle_touchdown(state, touch_event);
   } else {
+#ifdef CONFIG_TOUCH_NAV_BEZEL
+    if (state->bezel.phase != TouchNavBezelPhase_Idle) {
+      state->raw_disposition = prv_bezel_handle_event(state, touch_event);
+      return;
+    }
+#endif
+    if (state->bezel_only) {
+      return;
+    }
     recognizer_manager_handle_touch_event(touch_event, manager);
   }
 }

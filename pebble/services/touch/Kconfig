@@ -14,4 +14,33 @@ module = SERVICE_TOUCH
 module-str = Touch
 source "subsys/logging/Kconfig.template.log_level"
 
+config TOUCH_NAV_BEZEL
+    bool "Bezel scrolling"
+    depends on PLATFORM_ROUND
+    default y
+    help
+      Turn a finger sliding around the edge of a round screen into UP/DOWN
+      button presses, like a rotating bezel. Clockwise is DOWN. Enabled at
+      runtime by the "Bezel Scrolling" display setting, which also sets the
+      width of the ring along the edge where a rotation starts.
+
+if TOUCH_NAV_BEZEL
+
+config TOUCH_NAV_BEZEL_STEP_DEG
+    int "Bezel step angle"
+    default 15
+    range 5 90
+    help
+      Rotation, in degrees, that emits one UP or DOWN press.
+
+config TOUCH_NAV_BEZEL_COMMIT_DEG
+    int "Bezel commit angle"
+    default 8
+    range 1 90
+    help
+      Rotation, in degrees, after which a touch in the ring is taken as a
+      bezel rotation. Until then it may still become a tap or a swipe.
+
+endif
+
 endif
