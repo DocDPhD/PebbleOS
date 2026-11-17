@@ -15,6 +15,11 @@ void touch_service_set_system_handler(TouchServiceHandler handler, void *context
   (void)context;
 }
 
+void touch_service_set_raw_gate(TouchServiceRawGate gate, void *context) {
+  (void)gate;
+  (void)context;
+}
+
 void touch_service_subscribe(TouchServiceHandler handler, void *context) {
   (void)handler;
   (void)context;
