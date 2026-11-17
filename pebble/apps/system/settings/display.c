@@ -3,6 +3,7 @@
 
 #include "display.h"
 
+#include "bezel.h"
 #include "menu.h"
 #include "notifications_private.h"
 #include "option_menu.h"
@@ -588,6 +589,9 @@ enum SettingsDisplayItem {
   SettingsDisplayTouchNav,
   SettingsDisplayTouchNavMenus,
 #endif
+#ifdef CONFIG_TOUCH_NAV_BEZEL
+  SettingsDisplayTouchBezel,
+#endif
 #ifdef CONFIG_ORIENTATION_MANAGER
   SettingsDisplayOrientation,
 #endif
@@ -610,6 +614,12 @@ static bool prv_display_item_is_visible(uint16_t item) {
   // switch is on.
   if (item == SettingsDisplayTouchNavMenus) {
     return touch_is_globally_enabled();
+  }
+#endif
+#ifdef CONFIG_TOUCH_NAV_BEZEL
+  // Bezel scrolling rides touch navigation, so it only shows while that is on.
+  if (item == SettingsDisplayTouchBezel) {
+    return touch_is_globally_enabled() && touch_navigation_menu_is_enabled();
   }
 #endif
   return true;
@@ -645,6 +655,11 @@ static void prv_display_select_click_cb(SettingsCallbacks *context, uint16_t row
       break;
     case SettingsDisplayTouchNavMenus:
       touch_set_navigation_menu_enabled(!touch_navigation_menu_is_enabled());
+      break;
+#endif
+#ifdef CONFIG_TOUCH_NAV_BEZEL
+    case SettingsDisplayTouchBezel:
+      settings_bezel_menu_push();
       break;
 #endif
 #ifdef CONFIG_ORIENTATION_MANAGER
@@ -692,6 +707,12 @@ static void prv_display_draw_row_cb(SettingsCallbacks *context, GContext *ctx,
     case SettingsDisplayTouchNavMenus:
       title = pbl_i18n_noop("Touch Navigation");
       subtitle = touch_navigation_menu_is_enabled() ? pbl_i18n_noop("On") : pbl_i18n_noop("Off");
+      break;
+#endif
+#ifdef CONFIG_TOUCH_NAV_BEZEL
+    case SettingsDisplayTouchBezel:
+      title = pbl_i18n_noop("Bezel Scrolling");
+      subtitle = touch_bezel_nav_is_enabled() ? pbl_i18n_noop("On") : pbl_i18n_noop("Off");
       break;
 #endif
 #ifdef CONFIG_ORIENTATION_MANAGER
