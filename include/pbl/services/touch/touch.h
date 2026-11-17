@@ -81,6 +81,68 @@ bool touch_nav_enabled(void);
  */
 void touch_set_nav_enabled(bool enabled);
 
+/** @brief Strength of the haptic tick felt on every bezel scrolling step. */
+typedef enum TouchBezelHaptic {
+  TouchBezelHaptic_Off,
+  TouchBezelHaptic_Light,
+  TouchBezelHaptic_Medium,
+  TouchBezelHaptic_Strong,
+  TouchBezelHapticCount,
+} TouchBezelHaptic;
+
+/** @brief Width of the ring along the screen edge where a bezel rotation starts. */
+typedef enum TouchBezelWidth {
+  TouchBezelWidth_Thin,
+  TouchBezelWidth_Standard,
+  TouchBezelWidth_Large,
+  TouchBezelWidthCount,
+} TouchBezelWidth;
+
+/**
+ * @brief Get the bezel scrolling ring width.
+ *
+ * @return The width, set from the shell pref with touch_set_bezel_width().
+ */
+TouchBezelWidth touch_bezel_width(void);
+
+/**
+ * @brief Set the bezel scrolling ring width.
+ *
+ * @param width The width.
+ */
+void touch_set_bezel_width(TouchBezelWidth width);
+
+/**
+ * @brief Get the bezel scrolling haptic strength.
+ *
+ * @return The strength, set from the shell pref with touch_set_bezel_haptic().
+ */
+TouchBezelHaptic touch_bezel_haptic(void);
+
+/**
+ * @brief Set the bezel scrolling haptic strength.
+ *
+ * @param haptic The strength.
+ */
+void touch_set_bezel_haptic(TouchBezelHaptic haptic);
+
+/**
+ * @brief Check whether bezel scrolling is enabled.
+ *
+ * Off by default; the shell sets it with touch_set_bezel_nav_enabled() from the "Bezel Scrolling"
+ * pref. Only has an effect while touch navigation drives the touch.
+ *
+ * @return true when bezel scrolling is enabled.
+ */
+bool touch_bezel_nav_enabled(void);
+
+/**
+ * @brief Set the bezel scrolling gate.
+ *
+ * @param enabled true to enable bezel scrolling.
+ */
+void touch_set_bezel_nav_enabled(bool enabled);
+
 /**
  * @brief Check whether the app navigation dispatcher is installed for the running app.
  *

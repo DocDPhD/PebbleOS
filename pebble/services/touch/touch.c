@@ -36,6 +36,9 @@ static uint8_t s_raw_subscriber_tasks = 0;
 static bool s_backlight_subscribed = false;
 static bool s_system_hold_subscribed = false;
 static bool s_nav_enabled = false;
+static bool s_bezel_nav_enabled = false;
+static TouchBezelHaptic s_bezel_haptic = TouchBezelHaptic_Light;
+static TouchBezelWidth s_bezel_width = TouchBezelWidth_Standard;
 static bool s_app_nav_active = false;
 static bool s_globally_enabled = true;
 static bool s_sensor_enabled = false;
@@ -126,6 +129,45 @@ void touch_set_nav_enabled(bool enabled) {
   pbl_mutex_unlock(&s_touch_mutex);
 }
 
+bool touch_bezel_nav_enabled(void) {
+  pbl_mutex_lock(&s_touch_mutex, PBL_FOREVER);
+  const bool enabled = s_bezel_nav_enabled;
+  pbl_mutex_unlock(&s_touch_mutex);
+  return enabled;
+}
+
+void touch_set_bezel_nav_enabled(bool enabled) {
+  pbl_mutex_lock(&s_touch_mutex, PBL_FOREVER);
+  s_bezel_nav_enabled = enabled;
+  pbl_mutex_unlock(&s_touch_mutex);
+}
+
+TouchBezelWidth touch_bezel_width(void) {
+  pbl_mutex_lock(&s_touch_mutex, PBL_FOREVER);
+  const TouchBezelWidth width = s_bezel_width;
+  pbl_mutex_unlock(&s_touch_mutex);
+  return width;
+}
+
+void touch_set_bezel_width(TouchBezelWidth width) {
+  pbl_mutex_lock(&s_touch_mutex, PBL_FOREVER);
+  s_bezel_width = (width < TouchBezelWidthCount) ? width : TouchBezelWidth_Standard;
+  pbl_mutex_unlock(&s_touch_mutex);
+}
+
+TouchBezelHaptic touch_bezel_haptic(void) {
+  pbl_mutex_lock(&s_touch_mutex, PBL_FOREVER);
+  const TouchBezelHaptic haptic = s_bezel_haptic;
+  pbl_mutex_unlock(&s_touch_mutex);
+  return haptic;
+}
+
+void touch_set_bezel_haptic(TouchBezelHaptic haptic) {
+  pbl_mutex_lock(&s_touch_mutex, PBL_FOREVER);
+  s_bezel_haptic = (haptic < TouchBezelHapticCount) ? haptic : TouchBezelHaptic_Light;
+  pbl_mutex_unlock(&s_touch_mutex);
+}
+
 bool touch_app_nav_active(void) {
   pbl_mutex_lock(&s_touch_mutex, PBL_FOREVER);
   const bool active = s_app_nav_active;
@@ -183,6 +225,18 @@ PBL_SYSCALL(bool, sys_touch_service_is_enabled) {
 
 PBL_SYSCALL(bool, sys_touch_nav_enabled) {
   return touch_nav_enabled();
+}
+
+PBL_SYSCALL(bool, sys_touch_bezel_nav_enabled) {
+  return touch_bezel_nav_enabled();
+}
+
+PBL_SYSCALL(uint8_t, sys_touch_bezel_width) {
+  return (uint8_t)touch_bezel_width();
+}
+
+PBL_SYSCALL(uint8_t, sys_touch_bezel_haptic) {
+  return (uint8_t)touch_bezel_haptic();
 }
 
 PBL_SYSCALL(bool, sys_touch_app_nav_active) {

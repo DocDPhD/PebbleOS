@@ -183,6 +183,15 @@ void sys_touch_reset(void);
 //! and statics directly. Not exported to the SDK.
 bool sys_touch_nav_enabled(void);
 bool sys_touch_app_nav_active(void);
+//! Read the bezel scrolling gate. Not exported to the SDK.
+bool sys_touch_bezel_nav_enabled(void);
+//! Read the bezel scrolling ring width (a TouchBezelWidth). Not exported to the SDK.
+uint8_t sys_touch_bezel_width(void);
+//! Read the bezel scrolling haptic strength (a TouchBezelHaptic). Not exported to the SDK.
+uint8_t sys_touch_bezel_haptic(void);
+//! Whether the running app is one the user picked for bezel scrolling, with bezel scrolling on.
+//! Not exported to the SDK.
+bool sys_touch_bezel_app_enabled(void);
 
 //! Mark whether the calling task has a live raw-slot touch subscription
 //! (touch_service_subscribe). Drives touch_has_app_subscribers(); the shared
