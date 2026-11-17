@@ -116,6 +116,23 @@ static bool s_touch_enabled = true;
 #define PREF_KEY_TOUCH_NAVIGATION_MENU "touchNavMenuEnabled"
 static bool s_touch_navigation_menu_enabled = true;
 
+#ifdef CONFIG_TOUCH_NAV_BEZEL
+#define PREF_KEY_TOUCH_BEZEL_NAV "touchBezelNavEnabled"
+static bool s_touch_bezel_nav_enabled = false;
+
+#define PREF_KEY_TOUCH_BEZEL_WIDTH "touchBezelWidth"
+static uint8_t s_touch_bezel_width = 1; // TouchBezelWidth_Standard
+
+#define PREF_KEY_TOUCH_BEZEL_HAPTIC "touchBezelHaptic"
+static uint8_t s_touch_bezel_haptic = 1; // TouchBezelHaptic_Light
+
+#define PREF_KEY_TOUCH_BEZEL_APPS "touchBezelApps"
+typedef struct TouchBezelApps {
+  Uuid uuids[TOUCH_BEZEL_APPS_MAX]; //!< Picked apps first, the rest UUID_INVALID.
+} TouchBezelApps;
+static TouchBezelApps s_touch_bezel_apps;
+#endif
+
 #define PREF_KEY_MOTION_SENSITIVITY "motionSensitivity"
 static uint8_t s_motion_sensitivity = CONFIG_SERVICE_ACCEL_MANAGER_DEFAULT_SENSITIVITY;
 
@@ -570,6 +587,45 @@ static bool prv_set_s_touch_navigation_menu_enabled(bool *enabled) {
 #endif
   return true;
 }
+
+#ifdef CONFIG_TOUCH_NAV_BEZEL
+static bool prv_set_s_touch_bezel_width(uint8_t *width) {
+  if (*width > 2) {
+    s_touch_bezel_width = 1;
+    return false;
+  }
+  s_touch_bezel_width = *width;
+#ifdef CONFIG_TOUCH
+  touch_set_bezel_width((TouchBezelWidth)*width);
+#endif
+  return true;
+}
+
+static bool prv_set_s_touch_bezel_haptic(uint8_t *haptic) {
+  if (*haptic > 3) {
+    s_touch_bezel_haptic = 1;
+    return false;
+  }
+  s_touch_bezel_haptic = *haptic;
+#ifdef CONFIG_TOUCH
+  touch_set_bezel_haptic((TouchBezelHaptic)*haptic);
+#endif
+  return true;
+}
+
+static bool prv_set_s_touch_bezel_apps(TouchBezelApps *apps) {
+  s_touch_bezel_apps = *apps;
+  return true;
+}
+
+static bool prv_set_s_touch_bezel_nav_enabled(bool *enabled) {
+  s_touch_bezel_nav_enabled = *enabled;
+#ifdef CONFIG_TOUCH
+  touch_set_bezel_nav_enabled(*enabled);
+#endif
+  return true;
+}
+#endif
 
 #ifdef CONFIG_DYNAMIC_BACKLIGHT
 static bool prv_set_s_backlight_dynamic_mode(uint8_t *mode) {
@@ -1282,6 +1338,11 @@ void shell_prefs_init(void) {
   touch_set_backlight_enabled(s_backlight_touch_wake != BacklightTouchWake_Off);
   touch_service_set_globally_enabled(s_touch_enabled);
   touch_nav_set_enabled(prv_touch_navigation_effective());
+#ifdef CONFIG_TOUCH_NAV_BEZEL
+  touch_set_bezel_nav_enabled(s_touch_bezel_nav_enabled);
+  touch_set_bezel_haptic((TouchBezelHaptic)s_touch_bezel_haptic);
+  touch_set_bezel_width((TouchBezelWidth)s_touch_bezel_width);
+#endif
 #endif
 
 #ifdef CONFIG_BACKLIGHT_HAS_COLOR
@@ -1657,6 +1718,85 @@ bool touch_navigation_menu_is_enabled(void) {
 void touch_set_navigation_menu_enabled(bool enable) {
   prv_pref_set(PREF_KEY_TOUCH_NAVIGATION_MENU, &enable, sizeof(enable));
 }
+
+#ifdef CONFIG_TOUCH_NAV_BEZEL
+bool touch_bezel_nav_is_enabled(void) {
+  return s_touch_bezel_nav_enabled;
+}
+
+void touch_set_bezel_nav_pref(bool enable) {
+  prv_pref_set(PREF_KEY_TOUCH_BEZEL_NAV, &enable, sizeof(enable));
+}
+
+uint8_t touch_bezel_width_get(void) {
+  return s_touch_bezel_width;
+}
+
+void touch_bezel_width_set(uint8_t width) {
+  prv_pref_set(PREF_KEY_TOUCH_BEZEL_WIDTH, &width, sizeof(width));
+}
+
+uint8_t touch_bezel_haptic_get(void) {
+  return s_touch_bezel_haptic;
+}
+
+void touch_bezel_haptic_set(uint8_t haptic) {
+  prv_pref_set(PREF_KEY_TOUCH_BEZEL_HAPTIC, &haptic, sizeof(haptic));
+}
+
+// A zeroed (never written) or invalid slot is empty. UUID_SYSTEM (all zeros) is not a real app.
+static bool prv_bezel_app_slot_empty(const Uuid *uuid) {
+  return uuid_is_invalid(uuid) || uuid_is_system(uuid);
+}
+
+bool touch_bezel_app_is_enabled(const Uuid *uuid) {
+  if (prv_bezel_app_slot_empty(uuid)) {
+    return false;
+  }
+  for (unsigned int i = 0; i < TOUCH_BEZEL_APPS_MAX; i++) {
+    if (uuid_equal(&s_touch_bezel_apps.uuids[i], uuid)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool touch_bezel_app_set_enabled(const Uuid *uuid, bool enable) {
+  if (prv_bezel_app_slot_empty(uuid) || touch_bezel_app_is_enabled(uuid) == enable) {
+    return true;
+  }
+  // Rebuild the list compactly: picked apps first, the rest invalid.
+  TouchBezelApps apps;
+  unsigned int count = 0;
+  for (unsigned int i = 0; i < TOUCH_BEZEL_APPS_MAX; i++) {
+    const Uuid *entry = &s_touch_bezel_apps.uuids[i];
+    if (!prv_bezel_app_slot_empty(entry) && !uuid_equal(entry, uuid)) {
+      apps.uuids[count++] = *entry;
+    }
+  }
+  if (enable) {
+    if (count == TOUCH_BEZEL_APPS_MAX) {
+      return false;
+    }
+    apps.uuids[count++] = *uuid;
+  }
+  for (unsigned int i = count; i < TOUCH_BEZEL_APPS_MAX; i++) {
+    apps.uuids[i] = UUID_INVALID;
+  }
+  prv_pref_set(PREF_KEY_TOUCH_BEZEL_APPS, &apps, sizeof(apps));
+  return true;
+}
+
+uint8_t touch_bezel_app_count(void) {
+  uint8_t count = 0;
+  for (unsigned int i = 0; i < TOUCH_BEZEL_APPS_MAX; i++) {
+    if (!prv_bezel_app_slot_empty(&s_touch_bezel_apps.uuids[i])) {
+      count++;
+    }
+  }
+  return count;
+}
+#endif // CONFIG_TOUCH_NAV_BEZEL
 
 #ifdef CONFIG_DYNAMIC_BACKLIGHT
 BacklightDynamicMode backlight_get_dynamic_mode(void) {

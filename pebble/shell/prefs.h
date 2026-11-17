@@ -159,6 +159,29 @@ void touch_set_globally_enabled(bool enable);
 bool touch_navigation_menu_is_enabled(void);
 void touch_set_navigation_menu_enabled(bool enable);
 
+// Bezel scrolling pref (round displays): sliding a finger around the screen edge
+// emits UP/DOWN presses like a rotating bezel. Off by default; only has an effect
+// while touch navigation drives the touch.
+bool touch_bezel_nav_is_enabled(void);
+void touch_set_bezel_nav_pref(bool enable);
+
+// Width of the ring along the edge where a bezel rotation starts (a TouchBezelWidth, Standard by
+// default).
+uint8_t touch_bezel_width_get(void);
+void touch_bezel_width_set(uint8_t width);
+
+// Strength of the tick felt on every bezel step (a TouchBezelHaptic, Light by default).
+uint8_t touch_bezel_haptic_get(void);
+void touch_bezel_haptic_set(uint8_t haptic);
+
+// Apps the user picked for bezel scrolling. System menus always have it; apps only get it when
+// picked here, since many handle touch themselves.
+#define TOUCH_BEZEL_APPS_MAX 16
+bool touch_bezel_app_is_enabled(const Uuid *uuid);
+//! @return false if the list is full and the app could not be added.
+bool touch_bezel_app_set_enabled(const Uuid *uuid, bool enable);
+uint8_t touch_bezel_app_count(void);
+
 #ifdef CONFIG_DYNAMIC_BACKLIGHT
 // Dynamic backlight: how aggressively brightness ramps with ambient light.
 // Every mode keeps the same dim floor; the mode selects the lux level at

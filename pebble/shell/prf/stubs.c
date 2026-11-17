@@ -239,6 +239,37 @@ bool touch_navigation_menu_is_enabled(void) {
 void touch_set_navigation_menu_enabled(bool enable) {
 }
 
+bool touch_bezel_nav_is_enabled(void) {
+  return false;
+}
+
+void touch_set_bezel_nav_pref(bool enable) {
+}
+
+uint8_t touch_bezel_width_get(void) {
+  return 1;
+}
+
+void touch_bezel_width_set(uint8_t width) {
+}
+
+uint8_t touch_bezel_haptic_get(void) {
+  return 0;
+}
+
+void touch_bezel_haptic_set(uint8_t haptic) {
+}
+
+bool touch_bezel_app_is_enabled(const Uuid *uuid) {
+  return false;
+}
+
+bool touch_bezel_app_set_enabled(const Uuid *uuid, bool enable) {
+  return false;
+}
+
+uint8_t touch_bezel_app_count(void) {
+  return 0;
 bool bt_persistent_storage_get_airplane_mode_enabled(void) {
   return false;
 }
