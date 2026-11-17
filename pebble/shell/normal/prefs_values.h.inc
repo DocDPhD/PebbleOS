@@ -21,6 +21,12 @@
   PREFS_MACRO(PREF_KEY_BACKLIGHT_TOUCH, s_backlight_touch_wake)
   PREFS_MACRO(PREF_KEY_TOUCH_ENABLED, s_touch_enabled)
   PREFS_MACRO(PREF_KEY_TOUCH_NAVIGATION_MENU, s_touch_navigation_menu_enabled)
+#ifdef CONFIG_TOUCH_NAV_BEZEL
+  PREFS_MACRO(PREF_KEY_TOUCH_BEZEL_NAV, s_touch_bezel_nav_enabled)
+  PREFS_MACRO(PREF_KEY_TOUCH_BEZEL_WIDTH, s_touch_bezel_width)
+  PREFS_MACRO(PREF_KEY_TOUCH_BEZEL_HAPTIC, s_touch_bezel_haptic)
+  PREFS_MACRO(PREF_KEY_TOUCH_BEZEL_APPS, s_touch_bezel_apps)
+#endif
   PREFS_MACRO(PREF_KEY_MOTION_SENSITIVITY, s_motion_sensitivity)
 #ifdef CONFIG_DYNAMIC_BACKLIGHT
   PREFS_MACRO(PREF_KEY_BACKLIGHT_DYNAMIC_MODE, s_backlight_dynamic_mode)
