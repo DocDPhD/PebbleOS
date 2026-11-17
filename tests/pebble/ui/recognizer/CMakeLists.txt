@@ -83,3 +83,22 @@ pbl_clar_test(test_touch_nav
     tests/fakes/fake_rtc.c
   DEFINES CONFIG_TOUCH
 )
+
+pbl_clar_test(test_touch_nav_bezel
+  SOURCES
+    pebble/applib/graphics/gtypes.c
+    pebble/applib/ui/layer.c
+    pebble/applib/ui/recognizer/recognizer.c
+    pebble/applib/ui/recognizer/recognizer_manager.c
+    pebble/applib/ui/recognizer/pan.c
+    pebble/applib/ui/recognizer/swipe.c
+    pebble/applib/ui/recognizer/tap.c
+    pebble/applib/ui/recognizer/touch_nav.c
+    tests/fakes/fake_rtc.c
+  PLATFORMS gabbro
+  DEFINES
+    CONFIG_TOUCH
+    CONFIG_TOUCH_NAV_BEZEL
+    CONFIG_TOUCH_NAV_BEZEL_STEP_DEG=15
+    CONFIG_TOUCH_NAV_BEZEL_COMMIT_DEG=8
+)
