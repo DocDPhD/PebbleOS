@@ -6,6 +6,8 @@
 
 #include "bezel.h"
 
+#include "bezel_width.h"
+
 #ifdef CONFIG_TOUCH_NAV_BEZEL
 
 #include "menu.h"
@@ -25,6 +27,12 @@
 #include <process_management/app_install_manager.h>
 #include <process_management/app_menu_data_source.h>
 #include <shell/prefs.h>
+
+static const char *s_width_labels[TouchBezelWidthCount] = {
+  [TouchBezelWidth_Thin] = pbl_i18n_noop("Thin"),
+  [TouchBezelWidth_Standard] = pbl_i18n_noop("Standard"),
+  [TouchBezelWidth_Large] = pbl_i18n_noop("Large"),
+};
 
 static const char *s_haptic_labels[TouchBezelHapticCount] = {
   [TouchBezelHaptic_Off] = pbl_i18n_ctx_noop("BezelHaptic", "Off"),
@@ -112,6 +120,7 @@ static void prv_apps_push(void) {
 
 typedef enum SettingsBezelItem {
   SettingsBezelEnabled,
+  SettingsBezelWidth,
   SettingsBezelHaptic,
   SettingsBezelApps,
   SettingsBezelItemCount,
@@ -153,6 +162,12 @@ static void prv_draw_row_cb(SettingsCallbacks *context, GContext *ctx, const Lay
       title = pbl_i18n_noop("Bezel Scrolling");
       subtitle = touch_bezel_nav_is_enabled() ? pbl_i18n_noop("On") : pbl_i18n_noop("Off");
       break;
+    case SettingsBezelWidth: {
+      title = pbl_i18n_noop("Bezel Width");
+      const uint8_t width = touch_bezel_width_get();
+      subtitle = s_width_labels[(width < TouchBezelWidthCount) ? width : TouchBezelWidth_Standard];
+      break;
+    }
     case SettingsBezelHaptic: {
       title = pbl_i18n_noop("Haptic Feedback");
       const uint8_t haptic = touch_bezel_haptic_get();
@@ -188,6 +203,9 @@ static void prv_select_click_cb(SettingsCallbacks *context, uint16_t row) {
   switch ((SettingsBezelItem)row) {
     case SettingsBezelEnabled:
       touch_set_bezel_nav_pref(!touch_bezel_nav_is_enabled());
+      break;
+    case SettingsBezelWidth:
+      settings_bezel_width_push();
       break;
     case SettingsBezelHaptic:
       prv_haptic_menu_push(data);
